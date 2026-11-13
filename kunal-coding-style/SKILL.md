@@ -1,139 +1,251 @@
 ---
 name: kunal-coding-style
-description: Kunal Avghade's personal coding style — code-block shape, compactness, reusability, comments, resilience and per-language conventions (TypeScript/NestJS, Python, Go, plus defaults for others), distilled from production services Kunal has written. Apply whenever writing or modifying code for Kunal in any language, unless the target repo's own conventions clearly differ, in which case match the repo and keep the principles.
+description: Kunal Avghade's coding style — senior-level, industry-standard code that is readable, reusable, pattern-based and optimised. Covers naming, function and module shape, SOLID and design patterns (when to use them and when not), performance, error handling, comments, testability and per-language conventions (TypeScript/NestJS, Python, Go, Java). Apply whenever writing, refactoring or reviewing code for Kunal in any language; if the target repo's conventions clearly differ, match the repo and keep the principles. Pair with `kunal-best-practices` for how a change is planned, hardened and shipped.
 ---
 
 # Kunal's coding style
 
-Distilled from production code Kunal wrote: TypeScript/NestJS workflow workers, Python
-agent services and Go network services. When unsure how Kunal would shape something, look
-for code they authored in the current repo (`git log --author`) and match it.
+Write code the way a senior engineer would want to inherit it: **meaningful names, small focused
+units, guard-first flat flow, one obvious place for each responsibility, patterns only where they
+remove real duplication or coupling, and no wasted work.** It must be easy to read in review, easy
+to change next month, and easy to debug in production.
 
-The whole style in one line: **compact, guard-first, reusable, production-hardened code with
-few but pointed comments.** It must survive failures, be visible in logs, be tunable through
-config, and still be easy to debug at 2 a.m. on a customer's machine.
+Industry baselines this skill builds on: SOLID, DRY / KISS / YAGNI, *Clean Code* naming and
+function rules, *Refactoring* smells, the Gang-of-Four patterns, Effective Go, PEP 8 / PEP 484 /
+PEP 20, Google TypeScript and Java style guides, typescript-eslint recommended, Effective Java.
+
+`kunal-best-practices` owns behaviour (failure handling, retries, security, testing strategy,
+PRs). This skill owns **how the code itself is shaped**.
 
 ---
 
 ## Part A — Principles for every language
 
-### A1. Shape of a code block
+### A1. Readability first
 
-- **Guard clauses first, happy path last, flat.** Validate and return/throw at the top; avoid
-  `else` after a `return`. Nesting deeper than two levels is a signal to extract a helper.
+Code is read far more than it is written. Optimise for the next reader.
+
+- **Names reveal intent.** A reader should know what a thing is or does without opening it.
+  - Variables and fields: nouns (`pendingInvoices`, `retryDelayMs`, `activeSessionCount`).
+  - Functions and methods: verb + object (`calculateTax`, `fetchUserProfile`, `buildReport`).
+  - Booleans: `is` / `has` / `can` / `should` prefix (`isExpired`, `hasPermission`).
+  - Collections are plural; maps say what they map (`priceBySku`, `usersById`).
+  - **Units in the name** when the type doesn't carry them: `timeoutMs`, `maxSizeBytes`, `ttlSeconds`.
+  - No vague names: `data`, `info`, `obj`, `tmp`, `res2`, `handle()`, `process()`, `doStuff()`,
+    `Manager`/`Helper` classes with no clear job. No cryptic abbreviations (`usrCnt`, `cfgMgr`);
+    standard ones (`id`, `url`, `ctx`, `err`, `i` in a short loop) are fine.
+  - Name length tracks scope: one-letter only inside a three-line loop; exported names are
+    fully descriptive.
+- **One level of abstraction per function.** A function either orchestrates steps or does one
+  low-level thing — not both. If you need a comment to label a block, that block wants to be a
+  named function.
+- **Positive, explicit conditions.** `if (isValid)` over `if (!isInvalid)`; extract complex
+  conditions into a named boolean or predicate (`const canRetry = attempt < maxAttempts && isTransient(err);`).
+- **Consistent vocabulary.** Pick one word per concept (`fetch` vs `get` vs `load`) and use it
+  across the codebase.
+- **Least surprise.** A function named `getX` does not mutate state or perform IO beyond reading X.
+
+### A2. Shape of a code block
+
+- **Guard clauses first, happy path last, flat.** Validate and return/throw at the top; no `else`
+  after `return`. More than two levels of nesting means extract a function.
   ```ts
-  if (!output) return [];
-  if (!excludePatterns.length) return false;
-  ```
-- **Single-statement bodies stay on one line (or the next line) without braces** where the
-  language allows it. Multi-statement bodies always get braces.
-  ```ts
-  for (const pattern of excludePatterns)
-    if (fullPathSplit.includes(pattern)) return true;
-  ```
-- **Dispatch with `switch`, not `if/else` ladders**, once there are three or more cases — including
-  `switch (true)` for predicate dispatch in TS:
-  ```ts
-  switch (true) {
-    case stats.isFile():   return FileType.FILE;
-    case stats.isSocket(): return FileType.SOCKET;
-    default:               return FileType.UNKNOWN;
+  export function applyDiscount(order: Order, code?: string): Order {
+    if (!code) return order;
+    const discount = DISCOUNTS[code];
+    if (!discount) throw new InvalidDiscountError(code);
+    return { ...order, total: discount.apply(order.total) };
   }
   ```
-- **Lookup tables over branching** when a value maps to another value (`PERMISSION_MAP`,
-  `_EFFORT_RUNG = {"low": 0, "mid": 0, "high": 1}`).
-- **Build the result object up-front with defaults, then mutate it** as checks run. Keep
-  `errors` (block the operation) and `warnings` (inform only) as separate lists.
-- **Steps are visually separated** by one blank line; long multi-phase methods get
-  `// Step 1: …`, `// Step 2: …` markers. Never more than one empty line in a row.
-
-### A2. Compactness
-
-- Prefer **one-expression functions** for small pure helpers:
+- **Small functions, few parameters.** Aim for a function that fits on one screen and does one
+  thing. More than three parameters, or any boolean flag parameter → pass an options object /
+  keyword-only arguments / a config struct, or split the function.
+- **Dispatch with a map or `switch`, not `if/else` ladders**, once there are three or more cases.
+  Prefer a lookup table when each case maps a value to a value or a handler:
   ```ts
-  export const removePrefix = (str: string, prefix: string): string =>
-    str.startsWith(prefix) ? str.slice(prefix.length) : str;
-  export const isContentUpdate = (s: fs.Stats, d?: fs.Stats) =>
-    !d || s.size !== d.size || s.mtime.toISOString() !== d.mtime.toISOString();
+  const SHIPPING_RATE: Record<ShippingTier, number> = { standard: 0, express: 9.99, overnight: 24.99 };
+  ```
+- **Single-statement bodies may sit on one line** where the language and formatter allow it;
+  multi-statement bodies always get braces.
+- **Build results up-front, then fill them.** Create the result object with defaults, then
+  populate it as steps run. Keep blocking `errors` separate from informational `warnings`.
+- **Visually separate steps** with a single blank line; never more than one blank line in a row.
+- **Declare variables close to first use**, with the narrowest scope and `const`/`final`/
+  immutable by default.
+
+### A3. Compact, not clever
+
+- **Expression-bodied helpers** for small pure functions:
+  ```ts
+  export const isExpired = (expiresAt: Date, now = new Date()): boolean => expiresAt <= now;
   ```
   ```go
-  func (c *Config) Direct() bool { return c.Unrouted == UnroutedDirect }
+  func (o *Order) IsPaid() bool { return o.PaidAt != nil }
   ```
-- **Ternaries for two-way value choices**; never nest them more than once.
-- **Tiny inner helpers** instead of repeating an expression three times
-  (`const toRWX = (p: number) => \`${p & 4 ? 'r' : '-'}${p & 2 ? 'w' : '-'}${p & 1 ? 'x' : '-'}\``).
-- **Destructure inputs** in the signature (`async ({ jobRunId, status }: UpdateStatusInput)`) and
-  **spread to merge** outputs (`return { ...obj, ...checksums, sid }`).
-- **Defensive normalisation inline**: `(message || '').trim().toLowerCase()`,
-  `(history ?? []).slice(-maxTurns)`, `jobContext.jobConfig?.options?.flag`.
-- Use the standard library's compact forms: `Map`/`Set`/`frozenset`/`seen := map[string]bool{}`
-  for lookups and de-duplication; `some`/`every`/`any()`/`all()` for checks; `flatMap` for flattening.
-- Compact ≠ cryptic. **No comma-operator tricks**, no clever one-liners that need a comment to
-  decode, no `.map` used only for side effects (use `forEach`/`for…of`).
+- **Ternaries for a two-way value choice only**; never nest them.
+- **Destructure inputs, spread to compose outputs**:
+  `async function createUser({ email, role = Role.MEMBER }: CreateUserInput)`,
+  `return { ...defaults, ...overrides }`.
+- **Normalise defensively at the edge**: `(input ?? '').trim().toLowerCase()`,
+  `(items ?? []).slice(0, limit)`, optional chaining for optional data.
+- **Use the standard library's idioms**: `Map`/`Set`, `some`/`every`, `flatMap`,
+  comprehensions, `any()`/`all()`, `slices`/`maps` packages, `Optional`/streams in Java.
+- **Compact ≠ cryptic.** No comma-operator tricks, no chained ternaries, no `.map` for side
+  effects, no one-liners that need a comment to decode. If the clever version is shorter but
+  slower to understand, write the plain one.
 
-### A3. Reusability
+### A4. SOLID and structure
 
-- **Pure helpers live in a `utils` module next to the domain** (`utils/utils.ts`,
-  `<domain>/<domain>.utils.ts`): parsers (`parseWindowsShares`, `parseProtocolVersions`), mappers
-  (`getErrorCode(error, context)`), predicates (`shouldExclude`, `isContentUpdate`), factories
-  (`generateDummyFileEntry`). Services stay thin and call them.
-- **Parameterise instead of duplicating**: one function with a `context: 'TASK' | 'OPERATION'`
-  argument instead of two near-copies.
-- **Registries / plugin points for things that grow**: decorator-registered handlers sorted by
-  `order` (`@build_assessor(tier=…, order=…)`), per-platform config maps
-  (`nfs.win32 / nfs.linux / nfs.darwin`). Adding a capability must not require editing the loop.
-- **Small focused primitives over dependencies** (a 30-line `Map`-based `LRUCache`).
-- **Private helper classes next to their only consumer**; promote to a module when a second
+- **Single Responsibility** — a class/module has one reason to change. Split "fetch + decide +
+  persist + notify" into units and compose them.
+- **Open/Closed** — new behaviour is added by adding a strategy/handler/registration, not by
+  editing a growing `switch` in core code.
+- **Liskov** — subtypes honour the contract of their base; no "not supported" overrides.
+  If a subtype can't, the abstraction is wrong.
+- **Interface Segregation** — small, role-focused interfaces (`Reader`, `Notifier`) rather than
+  one fat interface every consumer half-uses.
+- **Dependency Inversion** — business logic depends on interfaces/ports; concrete IO
+  (database, HTTP, queue, filesystem) is injected. This is also the test seam.
+- **Composition over inheritance.** Inherit only for a true *is-a* with shared invariants;
+  otherwise inject collaborators.
+- **Pure core, imperative shell.** Keep business rules as pure, deterministic functions; push IO
+  to the edges (controllers, repositories, adapters). Pure code is trivially testable and reusable.
+- **Layering**: transport (controller/handler) → application service (orchestration) → domain
+  (rules, entities, value objects) → infrastructure (repositories, clients). Dependencies point
+  inward; the domain imports nothing from transport or infrastructure.
+- **Cohesive modules**: group by feature/domain (`billing/`, `users/`), not by technical type
+  across the whole app. Inside a feature: `*.service`, `*.repository`, `*.types`, `*.utils`,
+  `*.errors`, tests next to them.
+
+### A5. Reusability
+
+- **Rule of three, applied early for logic.** Extract on the second copy of non-trivial logic;
+  tolerate duplication of trivial lines rather than inventing a premature abstraction.
+- **Parameterise instead of near-copying.** One function with a well-typed parameter
+  (`kind: 'invoice' | 'credit-note'`) beats two functions that differ by a line.
+- **Generic, typed building blocks** — `Result<T, E>`, `Paginated<T>`, `retry<T>(fn, policy)`,
+  `withTimeout<T>(promise, ms)`, `chunk<T>(items, size)` — live in a shared module and are
+  reused everywhere instead of re-implemented inline.
+- **Wrap the repeated sequence.** When "authenticate → call → log → map errors" appears in every
+  client method, it becomes one private `request<T>(method, path, body)` helper.
+- **Small focused primitives over heavy dependencies** — a 30-line bounded cache beats pulling
+  in a framework for one feature; a well-maintained library beats a hand-rolled crypto/date/parsing
+  implementation.
+- **Keep helpers next to their only consumer**; promote to a shared module when a second
   consumer appears.
-- **Extract a helper the second time a block repeats** — e.g. the "get token → call service →
-  log success/failure" sequence belongs in one `callService(method, url, payload)` helper, not
-  copied into every method.
-- **Injectable seams for tests**: constructor DI in TS, function-valued fields in Go
-  (`DialDirect func(ctx, addr) (net.Conn, error)` "tests replace it"), plain arguments in Python.
+- **Stable, minimal public surface.** Export only what consumers need; everything else is
+  private/unexported so it can change freely.
 
-### A4. Comments
+### A6. Design patterns — use them to remove duplication or coupling, never for show
 
-Kunal comments sparingly and only where the code can't speak for itself.
+| Pattern | Reach for it when | Typical shape |
+|---|---|---|
+| **Strategy** | behaviour varies by type/config and the set grows | `Record<Kind, Handler>` / interface + map lookup |
+| **Factory** | construction depends on input/config or hides concrete classes | `createNotifier(channel): Notifier` |
+| **Registry / plugin** | new variants should be added without touching the core loop | decorator/`register()` adds handlers, loop iterates sorted registry |
+| **Adapter** | wrapping a third-party SDK or legacy API behind your own interface | `PaymentGateway` interface, `StripeGatewayAdapter` implements it |
+| **Decorator / middleware** | cross-cutting concerns: retry, timeout, caching, logging, metrics | `withRetry(withTimeout(fetchRates))`, framework interceptors |
+| **Repository** | isolating persistence from business logic | `OrderRepository.findPendingOlderThan(date)` |
+| **Builder** | objects with many optional parts or validation at build time | `ReportBuilder().withRange(r).withFilters(f).build()` |
+| **Template method / pipeline** | fixed sequence of steps with pluggable steps | ordered list of `Step` objects run by a runner |
+| **Observer / pub-sub** | decoupling producers from many consumers | domain events + handlers, message queue |
+| **Object pool** | expensive resources (connections, processes, workers) | bounded pool with health checks and least-busy selection |
+| **Circuit breaker** | protecting callers from a failing dependency | open/half-open/closed wrapper around a client |
+| **Value object** | a concept with rules (money, email, date range) | immutable type validated on construction |
+| **Null object / defaults** | removing repeated `if (x == null)` checks | no-op logger, empty config with safe defaults |
 
-- **Why, not what.** A comment explains a domain rule, a constraint or a trap:
+Rules:
+- **Start simple.** A function and a map are often the whole Strategy pattern. Introduce class
+  hierarchies only when state or multiple methods per variant justify them.
+- **YAGNI.** No interface with exactly one implementation unless it is a test seam or an IO
+  boundary. No factory for a class that is only ever `new`-ed one way.
+- **Name the pattern in the type, not in comments** (`TaxStrategy`, `OrderRepository`,
+  `RetryingHttpClient`), so the design is visible from the file tree.
+
+### A7. Performance by default (without premature micro-optimisation)
+
+- **Right data structure first.** `Set`/`Map`/dict for membership and lookup (O(1)) instead of
+  `array.includes`/`find` inside a loop (O(n²)). Index once (`const usersById = new Map(users.map(u => [u.id, u]))`), then look up.
+- **Don't repeat work.** Hoist invariant computations out of loops; compile regexes once; cache
+  pure, expensive results (memoise) with a bound; avoid recomputing derived values on every call.
+- **Batch and stream IO.** Bulk queries over per-item queries (no N+1); stream large files and
+  result sets; paginate APIs.
+- **Concurrency with a limit.** Run independent IO in parallel (`Promise.all`, goroutines,
+  `asyncio.gather`) but bounded by a configured limit; never unbounded fan-out.
+- **Lazy where it pays.** Compute or load only when needed; short-circuit `some`/`any` instead of
+  building full lists to check one condition.
+- **Avoid needless allocation in hot paths**: string building via join/builder, reuse buffers,
+  preallocate slices/arrays when the size is known.
+- **Measure before tuning.** Profile, then optimise the hot spot; keep the readable version
+  everywhere else. Record the before/after numbers in the PR.
+
+### A8. Types and data
+
+- **Make illegal states unrepresentable**: enums / union literals for closed sets, discriminated
+  unions for variants, value objects for validated concepts, required vs optional fields chosen
+  deliberately.
+- **Strict typing on**: no implicit `any`; external input is `unknown` until validated and
+  narrowed; no unchecked casts.
+- **Immutability by default**: `readonly`, `const`, `final`, frozen dataclasses; return new
+  objects instead of mutating arguments.
+- **No magic values**: named constants (`MAX_UPLOAD_SIZE_BYTES`) and enums; tunables from config.
+- **DTOs at boundaries, domain types inside.** Map between them explicitly; never leak ORM
+  entities or raw HTTP payloads through the domain.
+
+### A9. Errors (shape; behaviour lives in `kunal-best-practices`)
+
+- **Domain error types with a stable `code`**, extending the language's base error; callers
+  branch on type/code, never on message text.
   ```ts
-  // Only consider AccessAllowed (0) and AccessDenied (1) ACEs in comparison.
-  // Audit/object ACEs are not stamped, so comparing them gives false errors.
+  export class PaymentDeclinedError extends Error {
+    readonly code = 'PAYMENT_DECLINED';
+    constructor(readonly orderId: string, cause?: unknown) {
+      super(`Payment declined for order ${orderId}`, { cause });
+      this.name = 'PaymentDeclinedError';
+    }
+  }
   ```
-  ```go
-  // details goes as text cast to jsonb: behind pgbouncer's transaction pooling a
-  // []byte argument is sent as bytea, which jsonb rejects.
+- **Messages are actionable**: what failed, for which id, and what to do
+  (`"missing API key: set PAYMENTS_API_KEY or payments.apiKey in config"`).
+- **Return `Result`/`(value, err)` for expected outcomes** (validation, not-found); throw/raise for
+  unexpected failures. Be consistent within a module.
+
+### A10. Comments and documentation
+
+Comment sparingly and only where the code can't speak for itself.
+
+- **Why, not what.** Explain business rules, constraints, trade-offs and traps:
+  ```ts
+  // Card networks reject amounts with more than 2 decimals, so round before charging.
   ```
-- **Short tags on edge cases**: `// File or directory does not exist [edge case]`,
-  `// Too many open files [rare edge case]`, `process.exit(1); // mandatory (Node.js docs)`.
-- **Unit hints on literals**: `> 300000) { // 5 minutes`.
-- **Two-to-four-word comments are fine** when they mark intent (`// move up`, `// keep the last good one`).
-- **Doc comments only on public/exported API**, and short. Module-level docstrings explain the
-  module's purpose and extension point, not each line.
-- **Never** leave commented-out code, restate the code in English, or write JSDoc walls.
+- **Short tags for edge cases** (`// empty cart [edge case]`) and **unit hints on literals**
+  (`300_000 // 5 minutes`) when a named constant would be overkill.
+- **Doc comments on public API only** — exported functions, classes, interfaces — short, stating
+  purpose, non-obvious parameters, return value and errors. Go: start with the identifier name.
+  Python: one-line docstring; a short paragraph only for non-obvious guarantees.
+- **Module header** (one or two lines) for modules with an extension point, saying how to extend.
+- **Never**: commented-out code, comments that restate the code, banner-comment walls, stale
+  comments, `TODO` without an owner or ticket.
 
-### A5. Errors, resilience, config, observability
+### A11. Logging and configuration (shape)
 
-- **Domain error types with a stable code**; callers branch on type/code, never on message text.
-- **Catch at the boundary, log with context, re-raise a typed error.** Status-returning
-  operations return a structured error response instead of throwing.
-- **Collect per-item failures and continue**; abort only on structural errors (bad config,
-  invalid context). Go/Python validators accumulate `errs` and return them together.
-- **One bad plugin/item never breaks the batch** (`try … except Exception: log and skip`).
-- Kunal's resilience toolkit — reach for these whenever code touches processes or networks:
-  pools with round-robin / least-loaded selection, bounded queues with backpressure,
-  per-operation timeouts (longer minimums for known-slow classes, always cleared), health checks
-  with failure counters and self-healing recreation, bounded retries with small delays, unique
-  markers / `traceId` on every operation, reject-all-pending on shutdown, TTL or LRU caches in
-  front of slow lookups (keeping the last good value on read failure), fixed-size batches run
-  concurrently, escaping anything that crosses a shell/SQL boundary, platform guards.
-- **All tunables from config/env with safe defaults** — read once, stored in fields/constants,
-  with an inline comment when the default is a hard limit (`# gpt-4o's hard ceiling — do not raise`).
-- **Log the lifecycle**: start, success with duration, failure with duration and reason; prefix
-  with component and id (`[PersistentShell:${id}]`, `[${traceId}]`); truncate big payloads.
-  Levels: `debug` routine, `info/log` business events, `warn` degraded, `error` real failures only.
-- **Expose counters / rolling stats** (`getStats()`) for anything long-running.
-- **Everything started is stopped** (intervals, child processes, connections) in a shutdown hook.
+- **Structured logs** with a component prefix and a correlation id
+  (`[OrderService] [${requestId}] payment captured in ${durationMs}ms`). Levels: `debug` routine,
+  `info` business events, `warn` degraded, `error` real failures.
+- **One logger per class/module**, injected or created from the class name; no `console.*`/
+  `print` in application code.
+- **All tunables from config/env with safe defaults**, read once at startup into a typed,
+  validated config object — never `process.env`/`os.getenv` scattered through business logic.
+- **Everything started is stopped** (timers, pools, connections) in lifecycle/shutdown hooks.
+
+### A12. Testability
+
+- **Inject dependencies** (constructor injection, function parameters, interface fields) so tests
+  replace IO without monkey-patching.
+- **Pure functions for rules** — tested with plain inputs/outputs, table-driven where there are
+  many cases.
+- **Tests next to source**, named for behaviour (`returns 404 when the order does not exist`),
+  arranged as Arrange / Act / Assert, one behaviour per test.
 
 ---
 
@@ -141,102 +253,119 @@ Kunal comments sparingly and only where the code can't speak for itself.
 
 ### B1. TypeScript / NestJS
 
-- Formatting: Prettier `{ "singleQuote": true, "trailingComma": "all" }`, 2-space indent.
-- Imports: `@nestjs/*` → shared libs (`@org/*`) → project modules via absolute `src/...`.
-- **Utilities as exported `const` arrow functions** in `*.utils.ts`; services as
-  `@Injectable()` classes with constructor DI and a per-class logger:
+- **Tooling**: `strict: true` in `tsconfig`; ESLint with `typescript-eslint` recommended +
+  `eslint-config-prettier`; Prettier `{ "singleQuote": true, "trailingComma": "all" }`, 2-space
+  indent, 100-char lines.
+- **Naming**: `camelCase` variables/functions, `PascalCase` types/classes/enums, `UPPER_SNAKE_CASE`
+  module constants, kebab-case file names with role suffix (`order.service.ts`,
+  `order.repository.ts`, `order.types.ts`, `order.utils.ts`, `order.errors.ts`).
+- **Imports** grouped: framework (`@nestjs/*`) → third-party → internal shared libs → relative
+  feature modules; no deep relative chains (`../../../`) — use path aliases.
+- **Utilities as exported `const` arrow functions** in `*.utils.ts`; **services as `@Injectable()`
+  classes** with constructor injection, `private readonly` dependencies and a per-class logger:
   ```ts
-  private readonly logger: LoggerService;
-  constructor(
-    @Inject(LoggerFactory) loggerFactory: LoggerFactory,
-    private readonly redisService: RedisService,
-  ) {
-    this.logger = loggerFactory.create(PathResolverService.name);
+  @Injectable()
+  export class InvoiceService {
+    private readonly logger = new Logger(InvoiceService.name);
+
+    constructor(
+      private readonly invoices: InvoiceRepository,
+      private readonly payments: PaymentGateway,
+      private readonly config: AppConfig,
+    ) {}
   }
   ```
-- Types: `interface`/`type` declarations at the top of the file or in a sibling `*.types.ts`;
-  `enum` for every closed set (statuses, error codes, command keys, workflow names); module
-  constants in `SCREAMING_SNAKE_CASE`; `Record<string, T>` lookup tables.
-- Errors: `class XError extends Error { constructor(msg, public readonly code = 'X_ERROR') { super(msg); this.name = 'X_ERROR'; } }`.
-- Async: `Promise.all` over batches; chunk loops `for (let i = 0; i < items.length; i += 50)`;
-  `for await` for streams; wrap callback APIs in `new Promise((resolve, reject) => …)` with an
-  `errored` flag so reject fires once.
-- Temporal: parent workflow fans out `executeChild` per worker with deterministic ids
-  (`` `${WorkFlows.VALIDATE}-${traceId}-${workerId}` ``) and per-worker task queues, then merges.
-- NestJS lifecycle: `onModuleInit` creates pools/monitors, `onModuleDestroy` tears them down.
-- Prefer `unknown` + narrowing over `any` for external payloads; use the shared logger, not `console.*`
-  (except inside worker-thread scripts that have no DI).
-- Tests: Jest + `Test.createTestingModule`, every dependency a `Partial<T>` of `jest.fn()`s,
-  `*.spec.ts` next to the source, error classes tested too.
+- **Types**: `interface` for object contracts that may be implemented/extended, `type` for unions
+  and compositions; `enum` or `as const` objects for closed sets; `Record<K, V>` for lookup tables;
+  `unknown` + type guards (or zod/class-validator) for external data; avoid `any`.
+- **NestJS**: DTOs with `class-validator`, global `ValidationPipe({ whitelist: true })`; modules
+  per feature; providers for IO behind interfaces/tokens; config via `@nestjs/config` with a
+  validated schema; exception filters map domain errors to HTTP; `onModuleInit` /
+  `onModuleDestroy` own resource lifecycle.
+- **Async**: always `await` or return promises; `Promise.all` for independent work in bounded
+  chunks; `for await` for streams; wrap callback APIs once in a promise helper that settles exactly once.
+- **Tests**: Jest with `Test.createTestingModule`, dependencies as typed mocks (`jest.Mocked<T>`),
+  `*.spec.ts` next to the source.
 
 ### B2. Python
 
-- Tooling: Python 3.12, `uv`, ruff (`E,F,I,UP`) + black, **line length 100**, double quotes.
-- Every module starts with a short **module docstring** (purpose + how to extend), then
-  `from __future__ import annotations`, then a module logger `logger = logging.getLogger(__name__)`.
-- **Section dividers** inside longer modules:
-  `# ── Assessors ──────────────────────────────────────────────`.
-- **Private module constants** with a leading underscore, immutable where possible:
-  `_CANCEL_WORDS = {...}`, `_APPROVE_PHRASES = frozenset({...})`, `_EFFORT_RUNG: dict[str, int] = {...}`.
-- Modern typing: `list[dict]`, `str | None`, `collections.abc.Callable/Awaitable`, type aliases
-  for callable shapes (`BuildAssessor = Callable[[dict, dict], Awaitable[list[dict]]]`).
-- `@dataclass(frozen=True)` for value objects; plain `@dataclass` for mutable context threaded
-  through handlers.
-- **Keyword-only arguments** (`def fast_intent(*, action, message, has_plan)`) for anything with
-  more than ~3 parameters or boolean flags.
-- **Decorator registries** for extensibility (`def build_action(*, field=None, order=0)` returning
-  `deco`, list kept sorted by `(order, name)`).
-- Pure, deterministic logic separated from IO (`intent_rules.py` — "no IO; safe in workflow code").
-- Guards return early; small helpers return `""`/`None`/a default instead of raising.
-- Env config at module level: `int(os.getenv("X", "16384"))  # why this default`.
-- Broad excepts only at isolation boundaries, always with a reason:
-  `except Exception as exc:  # noqa: BLE001 - one action must never break the loop`.
-- Logging with `%` args, not f-strings: `logger.warning("build action '%s' skipped: %s", name, exc)`.
-- Docstrings: one line for simple functions; a short paragraph only when behaviour has a
-  non-obvious guarantee. Inline code in docstrings uses double backticks.
-- Tests: pytest, flat `tests/test_*.py`, run with `uv run pytest -q`.
+- **Tooling**: Python 3.12+, `uv`, ruff (`E,F,I,UP,B,SIM`) + black (or `ruff format`), mypy/pyright
+  in strict mode, line length 100, double quotes. Follow PEP 8 naming: `snake_case` functions and
+  variables, `PascalCase` classes, `UPPER_SNAKE_CASE` constants, `_leading_underscore` private.
+- **Module layout**: module docstring (purpose + how to extend) → `from __future__ import annotations`
+  → imports (stdlib / third-party / local, sorted) → `logger = logging.getLogger(__name__)` →
+  constants → types → functions/classes.
+- **Section dividers** in long modules: `# ── Handlers ─────────────────────────────`.
+- **Typing**: built-in generics (`list[str]`, `dict[str, int]`), `X | None`,
+  `collections.abc` (`Callable`, `Iterable`, `Awaitable`), `Protocol` for structural interfaces,
+  `TypeAlias` for callable shapes, `Literal`/`Enum` for closed sets.
+- **Data**: `@dataclass(frozen=True, slots=True)` for value objects; Pydantic models at IO
+  boundaries; plain dataclasses for mutable context.
+- **Keyword-only arguments** (`def create_invoice(*, customer_id, items, due_in_days=30)`) for
+  more than ~3 parameters or any boolean flag.
+- **Patterns the Pythonic way**: registries via decorators, strategies as dicts of callables,
+  context managers for resources (`with`/`async with`), generators for streaming.
+- **Errors**: custom exception hierarchy per package; `raise X(...) from exc`; broad `except`
+  only at isolation boundaries with a reason (`# noqa: BLE001 - one plugin must not break the loop`).
+- **Logging** with `%`-style args, not f-strings: `logger.warning("plugin %s skipped: %s", name, exc)`.
+- **Docstrings**: one line for simple functions; Google style for public functions with
+  non-obvious parameters or raised errors.
+- **Tests**: pytest, `tests/test_<module>.py`, fixtures and `parametrize`, `uv run pytest -q`.
 
 ### B3. Go
 
-- `gofmt`, standard layout (`cmd/<binary>/main.go`, `internal/<pkg>/`), `log/slog` with
-  key-value pairs: `s.log.Info("egress proxy ready", "gateways", gws, "routes", len(routes))`.
-- **Doc comments on every exported identifier, starting with its name**, one or two sentences:
-  `// CredentialFileFor returns the credential file used for gateway.`
-- **One-line methods** for trivial accessors/predicates; named constants in a `const ( … )` block
-  with a heading comment (`// Unrouted modes.`).
-- Config structs with YAML tags and a field comment explaining behaviour and defaults; a
-  `setDefaults`-style block (`if c.Unrouted == "" { c.Unrouted = UnroutedDeny }`) and a
-  `Validate()` that **accumulates `errs []error`** with actionable messages
-  (`"gateway %q has no credential: set credentials.%s, credential_file or EGRESS_CREDENTIAL"`).
-- Errors wrapped with context and `%w`: `fmt.Errorf("reading credential for gateway %s: %w", gw, err)`.
-- De-duplicate with `seen := map[string]bool{}` while preserving order.
-- Small private structs for cached values (`type cachedCred struct { value string; read time.Time }`)
-  guarded by a `sync.Mutex`; TTL re-read with "keep the last good one" on failure.
-- Function-valued fields as test seams; always set timeouts on dialers
-  (`&net.Dialer{Timeout: 20 * time.Second}`).
-- Table-driven `_test.go` files next to the code.
+- **Tooling**: `gofmt`/`goimports`, `go vet`, `golangci-lint` (errcheck, staticcheck, revive,
+  gosec); follow Effective Go and Go Code Review Comments.
+- **Layout**: `cmd/<binary>/main.go`, `internal/<domain>/`, small packages named by what they
+  provide (`billing`, `storage`), no `util`/`common` dumping grounds.
+- **Naming**: `MixedCaps`, short receiver names, initialisms kept upper-case (`userID`, `HTTPClient`),
+  getters without `Get` (`Name()`), interfaces named by behaviour (`Reader`, `Notifier`) and
+  defined where they are consumed.
+- **Doc comments on every exported identifier, starting with its name**:
+  `// Charge captures the payment for the given order.`
+- **Errors**: return `error` last; wrap with context `fmt.Errorf("charging order %s: %w", id, err)`;
+  sentinel errors (`var ErrNotFound = errors.New("not found")`) and typed errors checked with
+  `errors.Is`/`errors.As`; never panic for expected failures.
+- **Config structs** with tags and field comments, an `applyDefaults()` step and a `Validate()`
+  that accumulates errors (`errors.Join`) with actionable messages.
+- **Concurrency**: `context.Context` first parameter for anything that blocks; timeouts on every
+  client/dialer; `errgroup` with `SetLimit` for bounded fan-out; mutex-guarded small structs for
+  shared state; close channels from the sender only.
+- **Test seams**: small interfaces or function-valued fields; table-driven `_test.go` files with
+  `t.Run` subtests next to the code.
 
-### B4. Java / other languages
+### B4. Java / Spring Boot
 
-No Kunal-authored Java was found, so apply Part A with the language's mainstream conventions
-(Spring Boot: constructor injection, `@ConfigurationProperties` for tunables, custom exceptions
-with an error code, SLF4J with `{}` placeholders, JUnit 5 + Mockito tests next to the package).
+- Google Java Style / Effective Java; `final` by default, records for value objects, `Optional`
+  only as a return type.
+- Constructor injection only; `@ConfigurationProperties` (validated) for tunables; custom
+  unchecked exceptions with an error code mapped by `@ControllerAdvice`; SLF4J with `{}`
+  placeholders; JUnit 5 + Mockito + AssertJ, tests mirroring the package structure.
+
+### B5. Any other language
+
+Apply Part A with the language's mainstream style guide, formatter and linter, and match the
+existing repo first.
 
 ---
 
 ## Part C — Commits
 
-- Ticket style: `[TICKET-ID] Short description (fix)` — e.g. `[ABC-123] Slow copy on large directories (fix)`.
-- Conventional Commits: `feat: …`, `fix(store): …`, `chore: …`.
-- Match whichever the repo already uses.
+- Ticket style: `[TICKET-ID] Short description (fix)` — e.g. `[ABC-123] Slow export on large reports (fix)`.
+- Conventional Commits: `feat: …`, `fix(billing): …`, `refactor: …`, `chore: …`.
+- Imperative mood, one concern per commit. Match whichever style the repo already uses.
+
+---
 
 ## Checklist before handing code to Kunal
 
-1. Guards first, flat happy path, no nesting deeper than two levels?
-2. Could any block be a one-expression helper, a lookup table or a `switch`?
-3. Is any block copied a second time? Extract it.
-4. Every external call: timeout, typed error, log line with a context id?
-5. Tunables in config/env with sane defaults? Everything started is stopped?
-6. Per-item failures collected instead of aborting the batch?
-7. Comments only where they explain *why* — and no commented-out code?
-8. Tests next to the source with mocked dependencies?
+1. Could a new teammate understand every name without opening its definition?
+2. Guards first, flat happy path, functions small with ≤ 3 parameters and no boolean flags?
+3. Each class/module has one responsibility; IO injected; business rules pure?
+4. Any second copy of logic extracted; any `if/else` ladder replaced by a map, strategy or `switch`?
+5. Patterns used only where they remove real duplication or coupling — no speculative abstractions?
+6. Right data structures, no N+1 or O(n²) loops over growing data, bounded concurrency?
+7. Strict types, no `any`/unchecked casts, no magic values, tunables in config?
+8. Typed errors with codes and actionable messages; structured logs with a correlation id?
+9. Comments only where they explain *why*; public API documented; no commented-out code?
+10. Formatter and linter clean; tests next to the source covering the new behaviour?

@@ -65,18 +65,18 @@ Decide which bucket each error belongs to and encode it in the type, never in th
 | **Item-level** | one file/row/record is bad | collect into `errors[]`, continue the batch |
 | **Fatal / structural** | bad config, invalid context, auth failure | fail fast, non-retryable, clear message |
 
-- **Typed errors with stable codes** (`RetryExceededError`, `FatalError`, `ValidationError`);
+- **Typed errors with stable codes** (`RateLimitedError`, `ConfigurationError`, `ValidationError`);
   callers branch on `instanceof` / `.type` / `.code`.
 - **Retry policies are explicit and bounded**: initial interval, backoff, max interval,
   **max attempts**, and the list of non-retryable types. Unbounded retries are how jobs get stuck
   for hours.
-- **Escalate on the last attempt**: `const errorType = ++retryCount >= maxRetry ? TRANSIENT : RECOVERABLE;`
+- **Escalate on the last attempt**: when the final retry fails, raise a distinct non-retryable type (`RetryLimitReachedError`) so callers stop retrying and record it.
 - **Catch at boundaries only** — request handler, job/activity entry, worker-thread message
   handler, plugin loop. Log with context once, then re-throw a typed error or return a
   structured error response. Never swallow (`catch {}`), and never log-and-rethrow at every layer.
 - **Preserve the cause**: `new XError(msg, { cause: err })`, `fmt.Errorf("…: %w", err)`,
   `raise X(...) from exc`, and keep the stack in the log call.
-- **Pre-flight before expensive work**: check the input exists and is readable, the mount or
+- **Pre-flight before expensive work**: check the input exists and is readable, the volume or
   connection is alive, the disk has space, the dependency is reachable — then start.
 - **Fail loudly at startup** on missing required config; fail softly at runtime on optional
   dependencies (degrade + `warn`).
@@ -110,7 +110,7 @@ Decide which bucket each error belongs to and encode it in the type, never in th
   case; both from config where they vary per deployment.
 - **Every retry policy has max attempts and non-retryable error types**; activities raise
   application failures with a `type` the workflow can branch on, instead of matching messages.
-- **Deterministic child workflow ids** (`` `${WorkflowName}-${traceId}-${workerId}` ``) so restarts
+- **Deterministic child workflow ids** (`` `${workflowType}-${entityId}` ``, e.g. `invoice-sync-${invoiceId}`) so restarts
   dedupe instead of duplicating.
 - **Long loops use continue-as-new** before history grows large; iteration caps are constants.
 - **Changing a workflow/activity signature with runs in flight is a migration** — use the SDK's
@@ -146,7 +146,7 @@ Decide which bucket each error belongs to and encode it in the type, never in th
   the currently deployed code (expand → migrate → contract), and never edit an applied migration.
 - **Event, stream and queue names are constants** in one module, shared or mirrored by consumers.
 - **Use the right id.** Before querying, confirm which entity the id belongs to, and name
-  variables after the entity they hold (`configId`, not `id`).
+  variables after the entity they hold (`invoiceId`, `customerId` — not a bare `id`).
 - **Time and size comparisons are exact**: compare timestamps at the precision the source gives,
   sizes as integers, never via formatted strings.
 
@@ -177,14 +177,14 @@ Decide which bucket each error belongs to and encode it in the type, never in th
 - **Every bug fix ships with a regression test** that fails before the fix and passes after, in
   the same PR. Every new branch of logic gets a test, including the error branches.
 - **Tests sit next to the source** (`*.spec.ts`, `*_test.go`, `tests/test_*.py`), one spec per
-  unit, named for behaviour: `it('should skip if already completed')`.
+  unit, named for behaviour: `it('returns 404 when the order does not exist')`.
 - **Mock at module boundaries** (filesystem, cache, HTTP, workflow context, child processes), not
   internal helpers of the unit under test. Use `requireActual`-style partial mocks and override
   only what you need.
 - **Shared mocks live in a test-helper module** (`test/mocks/logger.mock.ts`), never imported
   from another spec file.
 - **Typed mocks over `as any`**: `Partial<T>` / `jest.Mocked<T>` / factories like
-  `createMockItem(status)`; `as any` only for deliberately malformed input.
+  `buildOrder({ status })`; `as any` only for deliberately malformed input.
 - **Build fixtures per test** (or with a factory) instead of mutating a shared object; reset
   mocks in `beforeEach`.
 - **Deterministic tests**: fake timers for intervals/timeouts, no real network, no sleeps, no
@@ -210,7 +210,7 @@ Decide which bucket each error belongs to and encode it in the type, never in th
 ## 11. Things to never leave behind
 
 - Commented-out code — delete it; git remembers.
-- `TODO` without a ticket id (`// TODO(ABC-123): handle FatalError`).
+- `TODO` without a ticket id (`// TODO(ABC-123): support partial refunds`).
 - Debug `console.log` / `print` lines in services.
 - Typos in file or identifier names — fix in new code; rename old ones in a dedicated PR.
 - Magic numbers for timing, size or concurrency.
