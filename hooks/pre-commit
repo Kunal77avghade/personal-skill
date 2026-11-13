@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Blocks commits whose staged content mentions any term in .git/info/forbidden-terms.
+# The term list is local and untracked, so the names it protects never reach the repo.
+set -euo pipefail
+
+terms_file="$(git rev-parse --git-dir)/info/forbidden-terms"
+[ -s "$terms_file" ] || exit 0
+
+pattern="$(grep -v '^\s*#' "$terms_file" | grep -v '^\s*$' | paste -sd'|' -)"
+[ -n "$pattern" ] || exit 0
+
+hits="$(git diff --cached --name-only --diff-filter=ACMR -z \
+  | xargs -0 -r git grep --cached -n -i -E "$pattern" -- 2>/dev/null || true)"
+names="$(git diff --cached --name-only --diff-filter=ACMR | grep -i -E "$pattern" || true)"
+
+if [ -n "$hits$names" ]; then
+  echo "pre-commit: staged changes mention a forbidden term:" >&2
+  if [ -n "$names" ]; then echo "$names" >&2; fi
+  if [ -n "$hits" ]; then echo "$hits" >&2; fi
+  exit 1
+fi
