@@ -212,20 +212,71 @@ Rules:
 
 ### A10. Comments and documentation
 
-Comment sparingly and only where the code can't speak for itself.
+**Default: no comment.** Good names, small functions and clear types should explain the code.
+Add a comment only when a reader would otherwise get it wrong or ask "why?". Most functions
+need zero comments.
 
-- **Why, not what.** Explain business rules, constraints, trade-offs and traps:
-  ```ts
-  // Card networks reject amounts with more than 2 decimals, so round before charging.
-  ```
-- **Short tags for edge cases** (`// empty cart [edge case]`) and **unit hints on literals**
-  (`300_000 // 5 minutes`) when a named constant would be overkill.
-- **Doc comments on public API only** — exported functions, classes, interfaces — short, stating
-  purpose, non-obvious parameters, return value and errors. Go: start with the identifier name.
-  Python: one-line docstring; a short paragraph only for non-obvious guarantees.
-- **Module header** (one or two lines) for modules with an extension point, saying how to extend.
-- **Never**: commented-out code, comments that restate the code, banner-comment walls, stale
-  comments, `TODO` without an owner or ticket.
+**Before writing a comment, try in order:**
+1. Rename the variable/function so the comment becomes unnecessary.
+2. Extract the block into a well-named function (the name *is* the comment).
+3. Replace a magic value with a named constant (`MAX_RETRIES`, `SESSION_TTL_MS`).
+4. Only if the *why* still isn't obvious — write one short comment.
+
+**When a comment earns its place:**
+- **A non-obvious reason**: business rule, external constraint, workaround, trade-off.
+- **A trap**: ordering that matters, a surprising library behaviour, a deliberate "do not change".
+- **An edge case** worth flagging: `// empty cart [edge case]`.
+- **A unit or meaning on a literal** when a constant is overkill: `300_000 // 5 minutes`.
+- **A link** to the spec, ticket or issue behind unusual code: `// see ABC-123`.
+
+**How to write it:**
+- **Short: one line, ideally under ~80 characters.** Two or three lines only for a genuinely
+  tricky reason. If it needs a paragraph, the code needs restructuring or the explanation
+  belongs in the PR description, ADR or README.
+- **Why, not what.** State the reason, not the mechanics the code already shows.
+- **Plain, precise words**; no filler ("basically", "simply", "this function will…"), no jokes,
+  no names or dates (git blame has them).
+- **Placed directly above** the line or block it explains; end-of-line only for very short notes.
+- **Kept true.** Change the comment in the same edit as the code, or delete it.
+
+```ts
+// ✗ Bad — restates the code, adds noise
+// Loop through all the users and check if each one is active
+for (const user of users) if (user.isActive) activeUsers.push(user);
+
+// ✗ Bad — a paragraph that should be a named function or a PR note
+// This function first gets the order, then it checks whether the order is
+// paid, and if it is paid then it calculates the refund amount based on ...
+
+// ✓ Good — explains a reason the code cannot show
+// Card networks reject amounts with more than 2 decimals.
+const amount = roundToCents(total);
+
+// ✓ Good — names do the work, no comment needed
+const activeUsers = users.filter(isActive);
+```
+
+**Doc comments (public API only):**
+- Only on exported/public functions, classes and interfaces — never on private helpers whose
+  name already says it all.
+- One sentence for purpose; add parameters, return value or errors **only when non-obvious**.
+  No `@param name the name` restating the signature and types.
+- Go: starts with the identifier name (`// Charge captures payment for the order.`).
+  Python: one-line docstring; Google-style sections only for non-obvious args/raises.
+  TS/Java: short JSDoc/Javadoc, no walls of tags.
+- **Module header**: one or two lines, only for modules with an extension point or a
+  non-obvious purpose.
+
+**Never write:**
+- Comments that repeat the code, the function name or the type signature.
+- Commented-out code — delete it; git keeps history.
+- Banner walls (`/*************/`), ASCII-art separators, or a comment on every line.
+- Change logs, author names or dates in comments.
+- Big explanatory essays inside functions.
+- Stale or misleading comments.
+- `TODO`/`FIXME` without a ticket or owner (`// TODO(ABC-123): support partial refunds`).
+- Comments that apologise or vent (`// hack, sorry`, `// don't know why this works`) — fix it,
+  or state the real reason and link the ticket.
 
 ### A11. Logging and configuration (shape)
 
@@ -367,5 +418,6 @@ existing repo first.
 6. Right data structures, no N+1 or O(n²) loops over growing data, bounded concurrency?
 7. Strict types, no `any`/unchecked casts, no magic values, tunables in config?
 8. Typed errors with codes and actionable messages; structured logs with a correlation id?
-9. Comments only where they explain *why*; public API documented; no commented-out code?
+9. Comments rare, one-line and *why*-only; none restating code; public API documented briefly;
+   no commented-out code or stale TODOs?
 10. Formatter and linter clean; tests next to the source covering the new behaviour?
